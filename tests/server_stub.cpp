@@ -1,6 +1,6 @@
 /****************************************************************
  *
- * Copyright (C) 2012-2014 Alessandro Pignotti <alessandro@leaningtech.com>
+ * Copyright (C) 2012-2016 Alessandro Pignotti <alessandro@leaningtech.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -20,17 +20,22 @@
 
 #define BOOST_NO_CXX11_NOEXCEPT
 #define BOOST_ASIO_DISABLE_MOVE
-#include <pion/net/HTTPServer.hpp>
-#include <pion/net/HTTPRequest.hpp>
-#include <pion/net/HTTPResponse.hpp>
-#include <pion/PionAlgorithms.hpp>
 #include <iostream>
-#include <fstream>
-#include <cheerp/server.h>
-#include <cheerp/promise.h>
-#include <cheerp/connection.h>
+#include <boost/asio.hpp>
+#include <boost/bind.hpp>
+#include <pion/error.hpp>
+#include <pion/process.hpp>
+#include <pion/http/server.hpp>
+#include <pion/http/response.hpp>
+#include <pion/http/response_writer.hpp>
+#include <pion/http/plugin_server.hpp>
+#include <pion/scheduler.hpp>
 
-using namespace pion::net;
+#include "cheerp/server.h"
+#include "cheerp/promise.h"
+#include "cheerp/connection.h"
+
+using namespace pion;
 using namespace std;
 
 namespace cheerp
@@ -49,10 +54,10 @@ struct CheerpMap
 
 extern CheerpMap cheerpFuncMap[];
 
-void requestHandler(HTTPRequestPtr request, TCPConnectionPtr conn)
+void requestHandler(const http::request_ptr& http_request_ptr, const tcp::connection_ptr& tcp_conn)
 {
-	const string& callName=request->getQuery("f");
-	const string& callArgs=pion::algo::url_decode(request->getQuery("a"));
+	const string& callName=http_request_ptr->get_query("f");
+	const string& callArgs=pion::algorithm::url_decode(http_request_ptr->get_query("a"));
 	entryPointSig callFunc=NULL;
 	for(CheerpMap* cur=cheerpFuncMap; cur->funcName!=NULL; cur++)
 	{
@@ -66,18 +71,22 @@ void requestHandler(HTTPRequestPtr request, TCPConnectionPtr conn)
 	if(callFunc==NULL)
 	{
 		cout << "Invalid call " << callName << endl;
-		HTTPResponse response(*request);
-		response.setStatusCode(404);
-		boost::system::error_code error;
-		response.send(*conn, error);
-		conn->finish();
+		http::response http_response(*http_request_ptr);
+		http_response.set_status_code(400);
+		http_response.set_status_message(http::types::RESPONSE_MESSAGE_BAD_REQUEST);
+		boost::system::error_code error_code;
+		http_response.send(*tcp_conn, error_code);
+		tcp_conn->finish();
 		return;
 	}
 
-	cheerp::connection =
-		new cheerp::Connection(HTTPResponseWriter::create(conn, *request, boost::bind(&TCPConnection::finish, conn)));
+	//tcp_conn->set_lifecycle(pion::tcp::connection::LIFECYCLE_CLOSE);
+	cheerp::connection = new cheerp::Connection(
+		http::response_writer_ptr(http::response_writer::create(tcp_conn,
+		                                                        *http_request_ptr,
+		                                                        boost::bind(&tcp::connection::finish, tcp_conn))));
 	//Send the data using the serialization interface
-	cheerp::PromiseBase* promise=callFunc(cheerp::connection,callArgs.c_str());
+	cheerp::PromiseBase* promise=callFunc(cheerp::connection, callArgs.c_str());
 	if(!promise)
 	{
 		cheerp::connection->flush();
@@ -85,64 +94,32 @@ void requestHandler(HTTPRequestPtr request, TCPConnectionPtr conn)
 	}
 }
 
-void fileRequestHandler(HTTPRequestPtr request, TCPConnectionPtr conn)
+int main ()
 {
-	cout << "Requesting static file " << request->getResource() << "\n";
-	HTTPResponse response(*request);
-	boost::system::error_code error;
-	const std::string fileName = request->getResource();
-	//Avoid naive directory traversal attacks
-	if(fileName.find("..")!=std::string::npos)
-	{
-		response.setStatusCode(404);
-		response.send(*conn, error);
-		conn->finish();
-		return;
-	}
-	ifstream file("."+fileName, std::ios::in | std::ios::binary);
-	if(!file.is_open())
-	{
-		response.setStatusCode(404);
-		response.send(*conn, error);
-	}
-	else
-	{
-		size_t fileSize=file.seekg(0, ios_base::end).tellg();
-		file.seekg(0, ios_base::beg);
-		response.setStatusCode(200);
-		response.setContentLength(fileSize);
-		response.send(*conn, error);
-		char buf[512];
-		while(file.read(buf,512).gcount() > 0)
-		  conn->write(boost::asio::buffer(buf, file.gcount()), error);
-	}
-	conn->finish();
-}
+	// initialize signal handlers, etc.
+	process::initialize();
 
-int main()
-{
-	pion::PionSingleServiceScheduler sched;
-	sched.setNumThreads(1);
-	HTTPServerPtr server(new HTTPServer(sched,1987));
-	cheerp::server = new cheerp::Server(server, sched.getIOService());
-	server->addResource("/cheerp_call", requestHandler);
-	server->addResource("/", fileRequestHandler);
-	server->start();
-	server->join();
-}
+	// initialize log system (use simple configuration)
+	logger main_log(PION_GET_LOGGER("cheerpserver"));
+	logger pion_log(PION_GET_LOGGER("pion"));
+	PION_LOG_SETLEVEL_INFO(main_log);
+	PION_LOG_SETLEVEL_INFO(pion_log);
+	PION_LOG_CONFIG_BASIC;
 
-namespace pion
-{
-	namespace net
-	{
-		const std::string HTTPTypes::STRING_EMPTY;
-		const std::string HTTPTypes::STRING_CRLF("\x0D\x0A");
-		const std::string HTTPTypes::STRING_HTTP_VERSION("HTTP/");
-		const std::string HTTPTypes::HEADER_NAME_VALUE_DELIMITER(": ");
-		const std::string HTTPTypes::REQUEST_METHOD_HEAD("HEAD");
-		const std::string HTTPTypes::HEADER_CONNECTION("Connection");
-		const std::string HTTPTypes::HEADER_TRANSFER_ENCODING("Transfer-Encoding");
-		const std::string HTTPTypes::HEADER_CONTENT_LENGTH("Content-Length");
-		const std::string HTTPTypes::RESPONSE_MESSAGE_OK("OK");
+	try {
+		// create a new server to handle the Hello TCP protocol
+		scheduler sched;
+		sched.set_num_threads(1);
+		http::plugin_server_ptr server(sched, new cheerp::Server(1987));
+		server->load_service("/", "FileService");
+		server->set_service_option("/", "directory", ".");
+		server->add_resource("/cheerp_call", boost::bind(&requestHandler, _1, _2));
+		server->start();
+		process::wait_for_shutdown();
+
+	} catch (std::exception& e) {
+		PION_LOG_FATAL(main_log, pion::diagnostic_information(e));
 	}
+
+	return 0;
 }

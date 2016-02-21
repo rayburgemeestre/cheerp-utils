@@ -1,4 +1,5 @@
-SERVERLIBS = -lboost_system -lpion-net-4.0 -pthread -lpion-common-4.0 -lboost_thread -lssl -lcrypto -llog4cpp -lboost_filesystem
+SERVERLIBS = -lboost_system -lpion -pthread -lboost_thread -lboost_filesystem -lboost_regex -lssl -lcrypto -llog4cpp
+
 SERVEROBJS = server_stub.o deserializer.o
 
 CXXFLAGS = -O2

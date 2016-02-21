@@ -23,8 +23,8 @@
 
 #define BOOST_NO_CXX11_NOEXCEPT
 #define BOOST_ASIO_DISABLE_MOVE
-#include <pion/net/HTTPResponseWriter.hpp>
-#include <pion/net/HTTPServer.hpp>
+#include <pion/http/plugin_server.hpp>
+#include <pion/http/response_writer.hpp>
 
 // This file contains the backend specific connection data
 // Currently we assume pion
@@ -60,10 +60,11 @@ public:
 class Connection: public SerializationInterface
 {
 public:
-	boost::shared_ptr<pion::net::HTTPResponseWriter> writer;
-	Connection(boost::shared_ptr<pion::net::HTTPResponseWriter> w):writer(w)
+	const pion::http::response_writer_ptr& writer;
+	Connection(const pion::http::response_writer_ptr &writer) : writer(writer)
 	{
 	}
+
 	void flush()
 	{
 		writer->write(buffer, offset);
@@ -75,14 +76,11 @@ public:
 	}
 };
 
-class Server
-{
+class Server : public pion::http::plugin_server {
 public:
-	boost::shared_ptr<pion::net::HTTPServer> server;
-	boost::asio::io_service& service;
-	Server(boost::shared_ptr<pion::net::HTTPServer> _server, boost::asio::io_service& _service):
-		server(_server),service(_service)
-	{
+	Server(const unsigned int tcp_port) : pion::http::plugin_server(tcp_port) {
+	}
+	virtual ~Server() {
 	}
 };
 
@@ -91,5 +89,4 @@ extern Connection* connection;
 extern Server* server;
 
 }
-
 #endif
