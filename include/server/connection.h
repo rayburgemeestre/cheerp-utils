@@ -60,7 +60,7 @@ public:
 class Connection: public SerializationInterface
 {
 public:
-	const pion::http::response_writer_ptr& writer;
+	const pion::http::response_writer_ptr writer;
 	Connection(const pion::http::response_writer_ptr &writer) : writer(writer)
 	{
 	}
@@ -78,7 +78,7 @@ public:
 
 class Server : public pion::http::plugin_server {
 public:
-	Server(const unsigned int tcp_port) : pion::http::plugin_server(tcp_port) {
+	Server(pion::scheduler & sched, const unsigned int tcp_port) : pion::http::plugin_server(sched, tcp_port) {
 	}
 	virtual ~Server() {
 	}
